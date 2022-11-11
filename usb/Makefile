@@ -5,11 +5,10 @@ M ?= $(shell pwd)
 
 KBUILD_OPTIONS	+= CONFIG_AOC_DRIVER=m
 
-EXTRA_CFLAGS	+= -I$(KERNEL_SRC)/../private/google-modules/aoc_ipc
-EXTRA_CFLAGS	+= -I$(KERNEL_SRC)/../private/google-modules/aoc
-EXTRA_CFLAGS	+= -I$(KERNEL_SRC)/drivers/usb/host
 EXTRA_SYMBOLS	+= $(OUT_DIR)/../private/google-modules/aoc/Module.symvers
 EXTRA_SYMBOLS	+= $(OUT_DIR)/../private/google-modules/aoc/alsa/Module.symvers
+
+include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 
 modules modules_install clean:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 \
