@@ -18,9 +18,6 @@
 #include <linux/poll.h>
 #include "aoc.h"
 
-/* TODO: it may not be needed later, depending on aoc_ipc header revision */
-#include "aoc_ipc_core_internal.h"
-
 typedef enum {
     AOC_SERVICE_EVENT_DOWN = 0,
     AOC_SERVICE_EVENT_MAX,
@@ -45,4 +42,5 @@ bool aoc_audio_current_state(void);
 
 struct aoc_state_client_t *alloc_audio_state_client(void);
 void free_audio_state_client(struct aoc_state_client_t *client);
+void audio_free_isr(struct aoc_service_dev *dev);
 #endif

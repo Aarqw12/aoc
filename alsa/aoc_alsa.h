@@ -78,7 +78,7 @@ enum uc_device_id {
 #define N_MIC_IN_SPATIAL_MODULE 3
 
 /* TODO: the exact number has to be determined based on hardware platform*/
-#define MAX_NUM_OF_SUBSTREAMS 32
+#define MAX_NUM_OF_SUBSTREAMS 64
 #define MAX_NUM_OF_SINKS 5
 #define AVAIL_SUBSTREAMS_MASK 0x0fff
 
@@ -108,23 +108,24 @@ enum uc_device_id {
 #define alsa2chip(vol) (vol) /* Convert alsa to chip volume */
 #define chip2alsa(vol) (vol) /* Convert chip to alsa volume */
 
-#define NULL_PATH -1
+#define MAX_NUM_OF_MAILBOX_INDEX 15
 
-/* Define trigger aoc watchdog reason */
-#define ALSA_CTL_TIMEOUT "alsa_ctl_timeout"
+#define NULL_PATH -1
 
 /* TODO: Copied from AoC repo and will be removed */
 enum bluetooth_mode {
 	AHS_BT_MODE_UNCONFIGURED = 0,
 	AHS_BT_MODE_SCO,
 	AHS_BT_MODE_ESCO,
-	AHS_BT_MODE_A2DP_RAW,
+	AHS_BT_MODE_ESCO_SWB,
 	AHS_BT_MODE_A2DP_ENC_SBC,
 	AHS_BT_MODE_A2DP_ENC_AAC,
 	AHS_BT_MODE_A2DP_ENC_LC3,
 	AHS_BT_MODE_BLE_ENC_LC3,
 	AHS_BT_MODE_BLE_CONVERSATION,
 	AHS_BT_MODE_A2DP_ENC_OPUS,
+	AHS_BT_MODE_A2DP_RAW,
+	AHS_BT_MODE_ESCO_LC3,
 };
 
 enum TelephonyModes {
@@ -183,7 +184,7 @@ enum aoc_playback_entry_point {
 	IMMERSIVE = 15,
 };
 
-enum { NORMAL = 0, MMAPED, RAW, INCALL, HIFI, ANDROID_AEC, COMPRESS };
+enum { NORMAL = 0, MMAPED, RAW, INCALL, HIFI, ANDROID_AEC, COMPRESS, CAP_INJ, HOTWORD_TAP };
 
 enum { BUILTIN_MIC0 = 0, BUILTIN_MIC1, BUILTIN_MIC2, BUILTIN_MIC3 };
 enum { MIC_LOW_POWER_GAIN = 0, MIC_HIGH_POWER_GAIN, MIC_CURRENT_GAIN };
@@ -195,16 +196,22 @@ enum aec_ref_source {
 	BT_PLAYBACK,
 	NUM_AEC_REF_SOURCE
 };
-enum { INCALL_CAPTURE_OFF = 0, INCALL_CAPTURE_UL, INCALL_CAPTURE_DL, INCALL_CAPTURE_UL_DL };
+enum { INCALL_CAPTURE_OFF = 0, INCALL_CAPTURE_UL, INCALL_CAPTURE_DL, INCALL_CAPTURE_UL_DL,
+	INCALL_CAPTURE_3MIC };
 enum { NONBLOCKING = 0, BLOCKING = 1 };
 enum { STOP = 0, START };
 enum { PLAYBACK_MODE, VOICE_TX_MODE, VOICE_RX_MODE, HAPTICS_MODE, OFFLOAD_MODE };
+
+enum { TIMER = 0, INTR };
+enum { INCALL_CHANNEL = 5, PCM_CHANNEL = 20, HIFI_CHANNEL, VOIP_CHANNEL};
+
+enum { CHRE_GAIN_PATH_PDM = 0, CHRE_GAIN_PATH_AEC, CHRE_GAIN_PATH_TOT };
 
 struct aoc_chip {
 	struct snd_card *card;
 	struct snd_soc_jack jack; /* TODO: temporary use, need refactor  */
 
-	uint32_t avail_substreams;
+	uint64_t avail_substreams;
 	struct aoc_alsa_stream *alsa_stream[MAX_NUM_OF_SUBSTREAMS];
 
 	struct aoc_service_dev *dev_alsa_stream[MAX_NUM_OF_SUBSTREAMS];
@@ -242,16 +249,26 @@ struct aoc_chip {
 	int compr_offload_volume;
 	int mic_spatial_module_enable;
 	int capture_eraser_enable;
+	int hotword_tap_enable;
+	int cca_module_loaded;
 	int sidetone_enable;
 	int mic_loopback_enabled;
 	int gapless_offload_enable;
-	unsigned int opened;
-	unsigned int capture_param_set;
+	int chirp_enable;
+	int chirp_interval;
+	int chirp_mode;
+	int chre_src_gain[CHRE_GAIN_PATH_TOT];
+	int chre_src_aec_timeout;
+	uint64_t opened;
+	uint64_t capture_param_set;
 	struct mutex audio_mutex;
 	struct mutex audio_cmd_chan_mutex;
 	spinlock_t audio_lock;
 	long pcm_wait_time_in_ms;
 	long voice_pcm_wait_time_in_ms;
+
+	bool hotword_supported;
+	bool chre_supported;
 
 	struct AUDIO_OUTPUT_BT_A2DP_ENC_CFG a2dp_encoder_cfg;
 	struct CMD_AUDIO_OUTPUT_USB_CONFIG usb_sink_cfg;
@@ -280,32 +297,44 @@ struct aoc_alsa_stream {
 	int idx; /* PCM device number */
 	int entry_point_idx; /* Index of entry point, same as idx in playback */
 	int stream_type; /* Normal pcm, incall, mmap, hifi, compr */
+	int isr_type; /* timer, interrupt */
+	atomic_t cancel_work_active;
 
 	int channels; /* Number of channels in audio */
 	int params_rate; /* Sampling rate */
 	int pcm_format_width; /* Number of bits */
 	bool pcm_float_fmt; /* Floating point */
+	bool reused_for_voip;
 
 	struct vm_area_struct *vma; /* for MMAP */
 	unsigned int period_size;
 	unsigned int buffer_size;
 	unsigned int pos;
+	unsigned int prev_pos;
+	unsigned int pos_delta;
+	unsigned long prev_buffer_cnt;
 	unsigned long hw_ptr_base; /* read/write pointers in ring buffer */
 	unsigned long prev_consumed;
 	int n_overflow;
 	int open;
 	int running;
 	int draining;
+	int wq_busy_count;
 
 	struct work_struct free_aoc_service_work;
+	struct workqueue_struct *pcm_period_wq;
+	struct workqueue_struct *incall_period_wq;
+	struct workqueue_struct *voip_period_wq;
 	struct work_struct pcm_period_work;
 };
 
+bool aoc_support_interrupt_idx(int idx);
 void aoc_timer_start(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_restart(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_stop(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_stop_sync(struct aoc_alsa_stream *alsa_stream);
 void aoc_pcm_period_work_handler(struct work_struct *work);
+bool aoc_pcm_update_pos(struct aoc_alsa_stream *alsa_stream, unsigned long consumed);
 
 int snd_aoc_new_ctl(struct aoc_chip *chip);
 int snd_aoc_new_pcm(struct aoc_chip *chip);
@@ -358,7 +387,9 @@ int ap_record_stop(struct aoc_chip *chip, struct aoc_alsa_stream *alsa_stream);
 int aoc_capture_filter_runtime_control(struct aoc_chip *chip, uint32_t port_id, bool on);
 int aoc_audio_capture_runtime_trigger(struct aoc_chip *chip, int ep_id, int dst, bool on);
 int aoc_audio_capture_eraser_enable(struct aoc_chip *chip, long enable);
+int aoc_hotword_tap_enable(struct aoc_chip *chip, long enable);
 int aoc_eraser_aec_reference_set(struct aoc_chip *chip, long ref_source);
+int aoc_load_cca_module(struct aoc_chip *chip, long load);
 
 int aoc_voice_call_mic_mute(struct aoc_chip *chip, int mute);
 int aoc_incall_capture_enable_get(struct aoc_chip *chip, int stream, long *val);
@@ -410,12 +441,21 @@ int aoc_audio_read(struct aoc_alsa_stream *alsa_stream, void *dest,
 int aoc_audio_volume_set(struct aoc_chip *chip, uint32_t volume,
 			 int src, int dst);
 
+int aoc_audio_set_chirp_parameter(struct aoc_chip *chip, int key, int value);
+
+int aoc_audio_set_chre_src_pdm_gain(struct aoc_chip *chip, int gain);
+int aoc_audio_set_chre_src_aec_gain(struct aoc_chip *chip, int gain);
+int aoc_audio_set_chre_src_aec_timeout(struct aoc_chip *chip, int timeout);
+
 int prepare_phonecall(struct aoc_alsa_stream *alsa_stream);
 int teardown_phonecall(struct aoc_alsa_stream *alsa_stream);
 
 int prepare_voipcall(struct aoc_alsa_stream *alsa_stream);
 int teardown_voipcall(struct aoc_alsa_stream *alsa_stream);
 
+void aoc_pcm_isr(struct aoc_service_dev *dev);
+void aoc_incall_hifi_isr(struct aoc_service_dev *dev);
+void aoc_voip_isr(struct aoc_service_dev *dev);
 void aoc_compr_offload_isr(struct aoc_service_dev *dev);
 int aoc_compr_offload_setup(struct aoc_alsa_stream *alsa_stream, int type);
 int aoc_compr_offload_send_metadata(struct aoc_alsa_stream *alsa_stream);
@@ -444,6 +484,7 @@ int aoc_incall_init(void);
 void aoc_incall_exit(void);
 int aoc_voip_init(void);
 void aoc_voip_exit(void);
+int aoc_audio_mic_mask_set(struct aoc_chip *chip, bool is_voice);
 
 int aoc_audio_us_record(struct aoc_chip *chip, bool enable);
 #endif

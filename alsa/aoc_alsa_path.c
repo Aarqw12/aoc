@@ -288,7 +288,7 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 			.rates = SNDRV_PCM_RATE_48000,
 			.formats = SNDRV_PCM_FMTBIT_S32_LE,
 			.channels_min = 2,
-			.channels_max = 2,
+			.channels_max = 4,
 		},
 		.name = "audio_raw",
 		.id = IDX_RAW_RX,
@@ -332,7 +332,7 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 			.rates = SNDRV_PCM_RATE_96000,
 			.formats = SNDRV_PCM_FMTBIT_S32_LE,
 			.channels_min = 2,
-			.channels_max = 2,
+			.channels_max = 4,
 		},
 		.name = "audio_ultrasonic",
 		.id = IDX_US_RX,
@@ -348,6 +348,20 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 		},
 		.name = "audio_immersive",
 		.id = IDX_IMSV_RX,
+	},
+
+	{
+		.playback = {
+			.stream_name = "audio_capture_inject",
+			.rates = SNDRV_PCM_RATE_8000_96000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+					SNDRV_PCM_FMTBIT_S24_LE |
+					SNDRV_PCM_FMTBIT_S32_LE,
+			.channels_min = 1,
+			.channels_max = 4,
+		},
+		.name = "audio_capture_inject",
+		.id = IDX_CAP_INJ_RX,
 	},
 
 	{
@@ -470,7 +484,7 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 					SNDRV_PCM_FMTBIT_S24_LE |
 					SNDRV_PCM_FMTBIT_S32_LE,
 			.channels_min = 1,
-			.channels_max = 4,
+			.channels_max = 8,
 		},
 		.name = "audio_incall_cap_0",
 		.id = IDX_INCALL_CAP0_TX,
@@ -484,7 +498,7 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 					SNDRV_PCM_FMTBIT_S24_LE |
 					SNDRV_PCM_FMTBIT_S32_LE,
 			.channels_min = 1,
-			.channels_max = 4,
+			.channels_max = 8,
 		},
 		.name = "audio_incall_cap_1",
 		.id = IDX_INCALL_CAP1_TX,
@@ -498,7 +512,7 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 					SNDRV_PCM_FMTBIT_S24_LE |
 					SNDRV_PCM_FMTBIT_S32_LE,
 			.channels_min = 1,
-			.channels_max = 4,
+			.channels_max = 8,
 		},
 		.name = "audio_incall_cap_2",
 		.id = IDX_INCALL_CAP2_TX,
@@ -532,6 +546,18 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 		},
 		.name = "audio_android_aec",
 		.id = IDX_ANDROID_AEC_TX,
+	},
+
+	{
+		.capture = {
+			.stream_name = "audio_hotword_tap",
+			.rates = SNDRV_PCM_RATE_16000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.channels_min = 1,
+			.channels_max = 2,
+		},
+		.name = "audio_hotword_tap",
+		.id = IDX_HOTWORD_TAP_TX,
 	},
 
 	/* BE dai */
@@ -2309,6 +2335,7 @@ static int aoc_path_probe(struct platform_device *pdev)
 		pr_err("%s: fail to reigster aoc path compon %d", __func__,
 		       ret);
 	}
+
 	return ret;
 }
 

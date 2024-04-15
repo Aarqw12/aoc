@@ -36,7 +36,6 @@ module_param(received_msg_count, long, S_IRUGO);
 module_param(sent_msg_count, long, S_IRUGO);
 
 struct chan_prvdata {
-	struct wakeup_source *queue_wakelock;
 	struct wakeup_source *user_wakelock;
 	struct task_struct *demux_task;
 };
@@ -57,23 +56,22 @@ static DEFINE_MUTEX(aocc_write_lock);
 static DEFINE_MUTEX(s_open_files_lock);
 
 #define AOCC_MAX_MSG_SIZE 1024
-#define AOCC_MAX_PENDING_MSGS 32
-#define AOCC_BLOCK_CHANNEL_THRESHOLD (AOCC_MAX_PENDING_MSGS - 3)
 static atomic_t channel_index_counter = ATOMIC_INIT(1);
+
+static u32 aocc_max_pending_msgs;
+static u32 aocc_block_channel_threshold;
 
 /* Driver methods */
 static int aocc_probe(struct aoc_service_dev *dev);
 static int aocc_remove(struct aoc_service_dev *dev);
 
-static const char * const wakelock_names[] = {
-	"usf_queue",
-	"usf_queue_non_wake_up",
-	NULL,
-};
-
 static const char * const channel_service_names[] = {
 	"com.google.usf",
 	"com.google.usf.non_wake_up",
+	"com.google.chre",
+	"com.google.chre.non_wake_up",
+	"com.google.bt",
+	"com.google.bt.non_wake_up",
 	"usf_sh_mem_doorbell",
 	NULL,
 };
@@ -211,15 +209,18 @@ static int aocc_demux_kthread(void *data)
 		list_for_each_entry(entry, &s_open_files, open_files_list) {
 			if (channel == entry->channel_index) {
 				handler_found = 1;
-				if (!node->msg.non_wake_up) {
+				if (!node->msg.non_wake_up &&
+				    (strcmp(dev_name(&service->dev),"com.google.usf") == 0 ||
+				     strcmp(dev_name(&service->dev),"com.google.chre") == 0 ||
+				     strcmp(dev_name(&service->dev),"com.google.bt") == 0)) {
 					take_wake_lock = true;
 				}
 
 				if (atomic_read(&entry->pending_msg_count) >
-				    AOCC_MAX_PENDING_MSGS) {
+				    aocc_max_pending_msgs) {
 					pr_err_ratelimited(
 						"Too many pending messages on channel %d.  More than %d allocated",
-						channel, AOCC_MAX_PENDING_MSGS);
+						channel, aocc_max_pending_msgs);
 					kfree(node);
 					break;
 				}
@@ -230,7 +231,7 @@ static int aocc_demux_kthread(void *data)
 					      &entry->pending_aoc_messages);
 				atomic_inc(&entry->pending_msg_count);
 				if (atomic_read(&entry->pending_msg_count) >
-				    AOCC_BLOCK_CHANNEL_THRESHOLD &&
+				    aocc_block_channel_threshold &&
 				    !entry->is_channel_blocked) {
 					rc = aocc_send_cmd_msg(service,
 						AOCC_CMD_BLOCK_CHANNEL, channel);
@@ -247,15 +248,11 @@ static int aocc_demux_kthread(void *data)
 		mutex_unlock(&s_open_files_lock);
 
 		/*
-		 * If the message is "waking", take a longer wakelock to allow userspace to
-		 * dequeue the message.  If non-waking, take a short wakelock until the queue
-		 * has been drained to make sure non-waking messages are not preventing us from
-		 * reading a waking message at the end.
+		 * If the message is "waking", take wakelock to allow userspace to dequeue
+                 * the message.
 		 */
 		if (take_wake_lock) {
 			pm_wakeup_ws_event(service_prvdata->user_wakelock, 200, true);
-		} else if (aoc_service_can_read(service)) {
-			pm_wakeup_ws_event(service_prvdata->queue_wakelock, 10, true);
 		}
 
 		if (!handler_found) {
@@ -607,7 +604,7 @@ static ssize_t aocc_read(struct file *file, char __user *buf, size_t count,
 	list_del(&node->msg_list);
 	atomic_dec(&private->pending_msg_count);
 	if (atomic_read(&private->pending_msg_count) <
-	    AOCC_BLOCK_CHANNEL_THRESHOLD && private->is_channel_blocked) {
+	    aocc_block_channel_threshold && private->is_channel_blocked) {
 		rc = aocc_send_cmd_msg(private->aocc_device_entry->service,
 				       AOCC_CMD_UNBLOCK_CHANNEL, private->channel_index);
 		if (rc >= 0)
@@ -769,8 +766,7 @@ static void aocc_sh_mem_doorbell_probe(struct aoc_service_dev *dev)
 static int aocc_probe(struct aoc_service_dev *dev)
 {
 	struct chan_prvdata *prvdata;
-	int ret = 0, i = 0;
-	bool service_found = false;
+	int ret = 0;
 	struct sched_param param = {
 		.sched_priority = 10,
 	};
@@ -781,21 +777,23 @@ static int aocc_probe(struct aoc_service_dev *dev)
 	if (!prvdata)
 		return -ENOMEM;
 
+	aocc_max_pending_msgs = dt_property(dev->dev.parent->of_node, "channel-max-pending-msgs");
+	if (aocc_max_pending_msgs == DT_PROPERTY_NOT_FOUND) {
+		dev_err(&dev->dev, "AOC DT missing property channel-max-pending-msgs");
+		return -EINVAL;
+	}
+	aocc_block_channel_threshold = dt_property(dev->dev.parent->of_node,
+						"block-channel-threshold");
+	if (aocc_block_channel_threshold == DT_PROPERTY_NOT_FOUND) {
+		dev_err(&dev->dev, "AOC DT missing property block_channel_threshold");
+		return -EINVAL;
+	}
+
 	if (strcmp(dev_name(&dev->dev), "usf_sh_mem_doorbell") != 0) {
 		ret = create_character_device(dev);
 		if (ret)
 			return ret;
 		prvdata->user_wakelock = wakeup_source_register(&dev->dev, dev_name(&dev->dev));
-		for (i = 0; i < ARRAY_SIZE(wakelock_names); i++) {
-			if (strcmp(dev_name(&dev->dev), channel_service_names[i]) == 0) {
-				prvdata->queue_wakelock = wakeup_source_register(&dev->dev,
-										 wakelock_names[i]);
-				service_found = true;
-				break;
-			}
-		}
-		if (!service_found)
-			return -EINVAL;
 		dev->prvdata = prvdata;
 		prvdata->demux_task =  kthread_run(&aocc_demux_kthread, dev, dev_name(&dev->dev));
 		sched_setscheduler(prvdata->demux_task, SCHED_FIFO, &param);
@@ -821,11 +819,6 @@ static int aocc_remove(struct aoc_service_dev *dev)
 	} else {
 		prvdata = dev->prvdata;
 		kthread_stop(prvdata->demux_task);
-		if (prvdata->queue_wakelock) {
-			wakeup_source_unregister(prvdata->queue_wakelock);
-			prvdata->queue_wakelock = NULL;
-		}
-
 		if (prvdata->user_wakelock) {
 			wakeup_source_unregister(prvdata->user_wakelock);
 			prvdata->user_wakelock = NULL;
@@ -878,7 +871,7 @@ static int aocc_prepare(struct device *dev)
 	struct aoc_service_dev *service = container_of(parent, struct aoc_service_dev, dev);
 	int rc;
 
-	if (strcmp(dev_name(dev), "usf_sh_mem_doorbell") == 0)
+	if (strcmp(dev_name(&service->dev), "com.google.usf") != 0)
 		return 0;
 
 	rc = aocc_send_cmd_msg(service, AOCC_CMD_SUSPEND_PREPARE, 0);
@@ -894,7 +887,7 @@ static void aocc_complete(struct device *dev)
 	struct aoc_service_dev *service = container_of(parent, struct aoc_service_dev, dev);
 	int rc;
 
-	if (strcmp(dev_name(dev), "usf_sh_mem_doorbell") == 0)
+	if (strcmp(dev_name(&service->dev), "com.google.usf") != 0)
 		return;
 
 	rc = aocc_send_cmd_msg(service, AOCC_CMD_WAKEUP_COMPELTE, 0);
