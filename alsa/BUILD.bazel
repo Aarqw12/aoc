@@ -19,6 +19,7 @@ kernel_module(
     ],
     kernel_build = "//private/google-modules/soc/gs:gs_kernel_build",
     visibility = [
+        "//private/google-modules/aoc/usb:__pkg__",
         "//private/google-modules/soc/gs:__pkg__",
     ],
     deps = [

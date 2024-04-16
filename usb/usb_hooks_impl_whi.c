@@ -200,7 +200,7 @@ int usb_vendor_helper_init(void)
 		pr_err("register_trace_android_vh_sound_usb_support_cpu_suspend failed, ret:%d\n",
 		       ret);
 
-	ret = register_trace_android_vh_usb_dev_suspend(usb_vendor_dev_suspend, NULL);
+	ret = register_trace_android_rvh_usb_dev_suspend(usb_vendor_dev_suspend, NULL);
 	if (ret)
 		pr_err("register_trace_android_vh_usb_dev_suspend failed, ret:%d\n", ret);
 
