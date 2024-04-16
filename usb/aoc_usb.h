@@ -20,8 +20,7 @@ enum aoc_usb_msg {
 	SETUP_DONE,
 	SET_ISOC_TR_INFO,
 	SYNC_CONN_STAT,
-	SET_OFFLOAD_STATE,
-	SEND_FB_EP_INFO
+	SET_OFFLOAD_STATE
 };
 
 enum aoc_usb_state {
